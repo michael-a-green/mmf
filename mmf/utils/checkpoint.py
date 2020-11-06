@@ -8,14 +8,14 @@ import sys
 import warnings
 
 import torch
+from omegaconf import OmegaConf
+
 from mmf.common.registry import registry
 from mmf.utils.configuration import get_mmf_env, load_yaml
 from mmf.utils.distributed import is_master, synchronize
 from mmf.utils.download import download_pretrained_model
 from mmf.utils.file_io import PathManager
 from mmf.utils.general import get_current_device, updir
-from omegaconf import OmegaConf
-
 
 try:
     import git
@@ -34,8 +34,39 @@ def _hack_imports():
     )
 
 
-def load_pretrained_model(model_name_or_path, *args, **kwargs):
-    # If this is a file, then load this directly else download and load
+def _allowed_checkpoint_exts():
+    return [".ckpt", ".pth", ".pt"]
+
+
+def _load_pretrained_checkpoint(checkpoint_path, *args, **kwargs):
+    assert (
+        os.path.splitext(checkpoint_path)[1] in _allowed_checkpoint_exts()
+    ), f"Checkpoint must have extensions: {list(_allowed_checkpoint_exts())}"
+
+    _hack_imports()
+
+    with PathManager.open(checkpoint_path, "rb") as f:
+        ckpt = torch.load(f, map_location=lambda storage, loc: storage)
+    assert "config" in ckpt, (
+        "No configs provided with pretrained model "
+        " while checkpoint also doesn't have configuration."
+    )
+    config = ckpt.pop("config", None)
+    model_config = config.get("model_config", config)
+
+    ckpt = ckpt.get("model", ckpt)
+
+    if "model_name" in kwargs:
+        model_name = kwargs["model_name"]
+    else:
+        assert len(model_config.keys()) == 1, "Only one model type should be specified."
+        model_name = list(model_config.keys())[0]
+
+    model_config = model_config.get(model_name)
+    return {"config": model_config, "checkpoint": ckpt, "full_config": config}
+
+
+def _load_pretrained_model(model_name_or_path, *args, **kwargs):
     if PathManager.exists(model_name_or_path):
         download_path = model_name_or_path
         model_name = model_name_or_path
@@ -50,7 +81,7 @@ def load_pretrained_model(model_name_or_path, *args, **kwargs):
     )
 
     ckpts = []
-    allowed_ckpt_types = ("*.ckpt", "*.pth", "*.pt")
+    allowed_ckpt_types = [f"*{ext}" for ext in _allowed_checkpoint_exts()]
     for ckpt_type in allowed_ckpt_types:
         ckpts.extend(glob.glob(os.path.join(download_path, ckpt_type)))
 
@@ -65,7 +96,7 @@ def load_pretrained_model(model_name_or_path, *args, **kwargs):
     # If configs are not present, will ckpt provide the config?
     if len(configs) == 0:
         assert "config" in ckpt, (
-            "No configs provided with pretrained model "
+            "No configs provided with pretrained model"
             " while checkpoint also doesn't have configuration."
         )
         config = ckpt["config"]
@@ -76,8 +107,17 @@ def load_pretrained_model(model_name_or_path, *args, **kwargs):
     ckpt = ckpt.get("model", ckpt)
     # Also handle the case of model_name is path
     model_config = model_config.get(model_name.split(os.path.sep)[-1].split(".")[0])
-
     return {"config": model_config, "checkpoint": ckpt, "full_config": config}
+
+
+def load_pretrained_model(model_name_or_path_or_checkpoint, *args, **kwargs):
+    # If this is a file, then load this directly else download and load
+    if PathManager.isfile(model_name_or_path_or_checkpoint):
+        return _load_pretrained_checkpoint(
+            model_name_or_path_or_checkpoint, args, kwargs
+        )
+    else:
+        return _load_pretrained_model(model_name_or_path_or_checkpoint, args, kwargs)
 
 
 def consolidate_optim_state_dict(optimizer):

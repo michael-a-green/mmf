@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Union
 
 import torch
+from omegaconf import II, DictConfig, OmegaConf
+from torch import Tensor, nn
+from transformers.modeling_bert import BertForPreTraining, BertPredictionHeadTransform
+
 from mmf.common.registry import registry
 from mmf.models.base_model import BaseModel
 from mmf.models.interfaces.mmbt import MMBTGridHMInterface
@@ -28,9 +32,6 @@ from mmf.modules.hf_layers import replace_with_jit
 from mmf.utils.checkpoint import load_pretrained_model
 from mmf.utils.configuration import get_mmf_cache_dir
 from mmf.utils.modeling import get_optimizer_parameters_for_bert
-from omegaconf import II, DictConfig, OmegaConf
-from torch import Tensor, nn
-from transformers.modeling_bert import BertForPreTraining, BertPredictionHeadTransform
 
 
 # TODO: Remove after transformers package upgrade to 2.5
@@ -614,8 +615,9 @@ class MMBT(BaseModel):
         model = super().from_pretrained(model_name, *args, **kwargs)
         config = load_pretrained_model(model_name)["full_config"]
         OmegaConf.set_struct(config, True)
-        if model_name == "mmbt.hateful_memes.images":
+        if model_name == "mmbt.hateful_memes.images" or kwargs.get("model_interface"):
             return MMBTGridHMInterface(model, config)
+        return model
 
     @classmethod
     def config_path(cls):
